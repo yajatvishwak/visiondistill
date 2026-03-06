@@ -18,7 +18,7 @@ def main() -> None:
         config=PipelineConfig(
             output_dir="./runs/distill",
             val_split=0.2,
-            device="cuda",
+            device="auto",
         ),
     )
 

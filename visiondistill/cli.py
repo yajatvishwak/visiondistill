@@ -38,7 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # Pipeline args
     p.add_argument("--val-split", type=float, default=0.2)
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--device", default="auto", help="Device: auto, cuda, mps, or cpu.")
     p.add_argument("--class-names", nargs="+", default=None, help="Class names for the dataset.")
     p.add_argument("--skip-annotation", action="store_true")
     p.add_argument("--skip-training", action="store_true")

@@ -15,6 +15,7 @@ from visiondistill.data.annotator import Prompts, annotate_dataset
 from visiondistill.data.dataset import build_yolo_dataset
 from visiondistill.students.yolo import YOLOStudent
 from visiondistill.teachers.base import BaseTeacher
+from visiondistill.utils.device import resolve_device
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,11 @@ class DistillationPipeline:
         self.student_config = student or StudentConfig()
         self.config = config or PipelineConfig()
 
-        self.teacher_config.device = self.config.device
+        self._device = resolve_device(self.config.device)
+        self.config.device = self._device
+        self.teacher_config.device = self._device
+        logger.info("Using device: %s", self._device)
+
         self._teacher: BaseTeacher | None = None
         self._student: YOLOStudent | None = None
 
@@ -147,6 +152,6 @@ class DistillationPipeline:
 
     def _get_student(self) -> YOLOStudent:
         if self._student is None:
-            self._student = YOLOStudent(self.student_config)
+            self._student = YOLOStudent(self.student_config, device=self._device)
             self._student.load()
         return self._student

@@ -37,7 +37,7 @@ class TeacherConfig:
     model: str | TeacherModel = TeacherModel.SAM3
     weights: str | None = None
     prompt_type: str | PromptType = PromptType.TEXT
-    device: str = "cuda"
+    device: str = "auto"
     dtype: str = "float16"
     threshold: float = 0.5
     mask_threshold: float = 0.5
@@ -73,7 +73,7 @@ class PipelineConfig:
 
     output_dir: str | Path = "./runs/distill"
     val_split: float = 0.2
-    device: str = "cuda"
+    device: str = "auto"
     batch_size: int = 1
     num_workers: int = 4
     seed: int = 42

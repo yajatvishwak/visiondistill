@@ -9,12 +9,7 @@ from transformers import Sam3Model, Sam3Processor
 
 from visiondistill.config import PromptType, TeacherConfig
 from visiondistill.teachers.base import BaseTeacher, MaskOutput
-
-_DTYPE_MAP = {
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-    "float32": torch.float32,
-}
+from visiondistill.utils.device import safe_dtype
 
 
 class SAM3Teacher(BaseTeacher):
@@ -28,7 +23,7 @@ class SAM3Teacher(BaseTeacher):
     }
 
     def load(self) -> None:
-        dtype = _DTYPE_MAP.get(self.config.dtype, torch.float32)
+        dtype = safe_dtype(self.config.device, self.config.dtype)
         self.model = Sam3Model.from_pretrained(
             self.config.weights, torch_dtype=dtype
         ).to(self.config.device)

@@ -9,12 +9,7 @@ from transformers import Sam2Model, Sam2Processor, pipeline as hf_pipeline
 
 from visiondistill.config import PromptType, TeacherConfig
 from visiondistill.teachers.base import BaseTeacher, MaskOutput
-
-_DTYPE_MAP = {
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-    "float32": torch.float32,
-}
+from visiondistill.utils.device import safe_dtype
 
 
 class SAM2Teacher(BaseTeacher):
@@ -27,7 +22,7 @@ class SAM2Teacher(BaseTeacher):
         self._auto_pipeline: Any = None
 
     def load(self) -> None:
-        dtype = _DTYPE_MAP.get(self.config.dtype, torch.float32)
+        dtype = safe_dtype(self.config.device, self.config.dtype)
         if self.config.prompt_type == PromptType.AUTO:
             self._auto_pipeline = hf_pipeline(
                 "mask-generation",
