@@ -31,6 +31,16 @@ DEFAULTS_WEIGHTS: dict[TeacherModel, str] = {
 
 
 @dataclass
+class AugmentConfig:
+    """Holds optional Ultralytics train() augmentation keyword arguments."""
+
+    params: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in self.params.items() if v is not None}
+
+
+@dataclass
 class TeacherConfig:
     """Configuration for the teacher (foundation) model."""
 
@@ -60,11 +70,14 @@ class StudentConfig:
     epochs: int = 100
     imgsz: int = 640
     batch: int = 16
+    augment: AugmentConfig | dict[str, Any] | None = None
     train_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if isinstance(self.task, str):
             self.task = TaskType(self.task)
+        if isinstance(self.augment, dict):
+            self.augment = AugmentConfig(self.augment)
 
 
 @dataclass
