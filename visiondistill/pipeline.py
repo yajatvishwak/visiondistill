@@ -7,17 +7,28 @@ from typing import Any
 from visiondistill.config import (
     PipelineConfig,
     StudentConfig,
-    TaskType,
+    StudentModel,
     TeacherConfig,
     TeacherModel,
 )
 from visiondistill.data.annotator import Prompts, annotate_dataset
 from visiondistill.data.dataset import build_yolo_dataset
-from visiondistill.students.yolo import YOLOStudent
+from visiondistill.data.segformer_dataset import build_segformer_dataset
+from visiondistill.students.base import BaseStudent
 from visiondistill.teachers.base import BaseTeacher
 from visiondistill.utils.device import resolve_device
 
 logger = logging.getLogger(__name__)
+
+
+def _build_student(config: StudentConfig, device: str) -> BaseStudent:
+    if config.student_model == StudentModel.YOLO:
+        from visiondistill.students.yolo import YOLOStudent
+        return YOLOStudent(config, device=device)
+    elif config.student_model == StudentModel.SEGFORMER:
+        from visiondistill.students.segformer import SegFormerStudent
+        return SegFormerStudent(config, device=device)
+    raise ValueError(f"Unknown student model: {config.student_model}")
 
 
 def _build_teacher(config: TeacherConfig) -> BaseTeacher:
@@ -36,8 +47,8 @@ class DistillationPipeline:
     1. Load the teacher model (SAM2 / SAM3).
     2. Run inference on the user's images to produce segmentation masks.
     3. Convert masks to YOLO-format polygon labels.
-    4. Build a YOLO dataset directory with train/val split.
-    5. Train a YOLO student model via Ultralytics.
+    4. Build a dataset directory (YOLO or SegFormer format).
+    5. Train a student model (YOLO or SegFormer).
     """
 
     def __init__(
@@ -56,7 +67,7 @@ class DistillationPipeline:
         logger.info("Using device: %s", self._device)
 
         self._teacher: BaseTeacher | None = None
-        self._student: YOLOStudent | None = None
+        self._student: BaseStudent | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -71,7 +82,7 @@ class DistillationPipeline:
         skip_annotation: bool = False,
         skip_training: bool = False,
     ) -> Path:
-        """Execute the full pipeline. Returns the path to ``data.yaml``."""
+        """Execute the full pipeline. Returns the dataset path (data.yaml or directory)."""
         images_dir = Path(images_dir)
         output_dir = self.config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -85,23 +96,34 @@ class DistillationPipeline:
         else:
             logger.info("Skipping annotation (skip_annotation=True)")
 
-        logger.info("Step 2/3: Building YOLO dataset")
-        data_yaml = build_yolo_dataset(
-            images_dir=images_dir,
-            labels_dir=labels_dir,
-            output_dir=dataset_dir,
-            class_names=class_names,
-            val_split=self.config.val_split,
-            seed=self.config.seed,
-        )
+        if self.student_config.student_model == StudentModel.SEGFORMER:
+            logger.info("Step 2/3: Building SegFormer dataset")
+            data_path = build_segformer_dataset(
+                images_dir=images_dir,
+                labels_dir=labels_dir,
+                output_dir=dataset_dir,
+                class_names=class_names,
+                val_split=self.config.val_split,
+                seed=self.config.seed,
+            )
+        else:
+            logger.info("Step 2/3: Building YOLO dataset")
+            data_path = build_yolo_dataset(
+                images_dir=images_dir,
+                labels_dir=labels_dir,
+                output_dir=dataset_dir,
+                class_names=class_names,
+                val_split=self.config.val_split,
+                seed=self.config.seed,
+            )
 
         if not skip_training:
             logger.info("Step 3/3: Training student model")
-            self._train(data_yaml, project=output_dir / "train")
+            self._train(data_path, project=output_dir / "train")
         else:
             logger.info("Skipping training (skip_training=True)")
 
-        return data_yaml
+        return data_path
 
     def annotate_only(
         self,
@@ -116,9 +138,9 @@ class DistillationPipeline:
         self._annotate(images_dir, labels_dir, prompts, class_ids)
         return labels_dir
 
-    def train_only(self, data_yaml: str | Path) -> Any:
-        """Only run training on an existing YOLO dataset."""
-        return self._train(Path(data_yaml), project=self.config.output_dir / "train")
+    def train_only(self, data_path: str | Path) -> Any:
+        """Only run training on an existing dataset (YOLO data.yaml or SegFormer dir)."""
+        return self._train(Path(data_path), project=self.config.output_dir / "train")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -140,9 +162,9 @@ class DistillationPipeline:
             class_ids=class_ids,
         )
 
-    def _train(self, data_yaml: Path, project: Path | None = None) -> Any:
+    def _train(self, data_path: Path, project: Path | None = None) -> Any:
         student = self._get_student()
-        return student.train(data_yaml, project=project)
+        return student.train(data_path, project=project)
 
     def _get_teacher(self) -> BaseTeacher:
         if self._teacher is None:
@@ -150,8 +172,8 @@ class DistillationPipeline:
             self._teacher.load()
         return self._teacher
 
-    def _get_student(self) -> YOLOStudent:
+    def _get_student(self) -> BaseStudent:
         if self._student is None:
-            self._student = YOLOStudent(self.student_config, device=self._device)
+            self._student = _build_student(self.student_config, device=self._device)
             self._student.load()
         return self._student

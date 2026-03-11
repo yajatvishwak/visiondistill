@@ -1,6 +1,6 @@
 # visiondistill
 
-`visiondistill` uses foundation vision models such as `SAM2` and `SAM3` to generate pseudo-labels, then trains smaller Ultralytics YOLO models on that data.
+`visiondistill` uses foundation vision models such as `SAM2` and `SAM3` to generate pseudo-labels, then trains smaller student models (YOLO or SegFormer) on that data.
 
 Current focus: segmentation distillation. Detection support can be added later through the same pipeline structure.
 
@@ -9,9 +9,9 @@ Current focus: segmentation distillation. Detection support can be added later t
 - Loads teacher weights from Hugging Face or a local path
 - Supports `sam2` and `sam3`
 - Generates segmentation masks from prompts or automatic mask generation
-- Converts masks to YOLO segmentation labels
-- Builds a YOLO `train/` and `val/` dataset
-- Trains a student model such as `yolov8n-seg.pt`
+- Converts masks to YOLO segmentation labels or per-pixel PNG masks
+- Builds a `train/` and `val/` dataset (YOLO format or SegFormer format)
+- Trains a student model -- YOLO via Ultralytics or SegFormer via HuggingFace Trainer
 
 ## How It Works
 
@@ -20,10 +20,13 @@ flowchart LR
     images[Images] --> teacher[TeacherModel]
     prompts[PromptsOptional] --> teacher
     teacher --> masks[Masks]
-    masks --> labels[YOLOLabels]
-    labels --> dataset[YOLODataset]
-    dataset --> student[UltralyticsYOLO]
-    student --> weights[StudentWeights]
+    masks --> labels[YOLOPolygonLabels]
+    labels --> yoloDS[YOLODataset]
+    labels --> sfDS[SegFormerDataset]
+    yoloDS --> yolo[UltralyticsYOLO]
+    sfDS --> sf[HuggingFaceSegFormer]
+    yolo --> weights[StudentWeights]
+    sf --> weights
 ```
 
 
@@ -56,7 +59,7 @@ By default, `device` is set to `"auto"`, which picks the best available backend:
 2. Apple Silicon MPS if available
 3. CPU as fallback
 
-Both the teacher (SAM) and the student (YOLO) run on the same resolved device. The dtype is also adjusted automatically -- `float16` is only used on CUDA; on MPS and CPU it promotes to `float32`.
+Both the teacher (SAM) and the student (YOLO or SegFormer) run on the same resolved device. The dtype is also adjusted automatically -- `float16` is only used on CUDA; on MPS and CPU it promotes to `float32`.
 
 ### NVIDIA CUDA
 
@@ -104,7 +107,7 @@ If you request `cuda` or `mps` and it is not available, the pipeline logs a warn
 
 ## Quick Start
 
-### Python
+### YOLO Student (default)
 
 ```python
 from visiondistill import DistillationPipeline, TeacherConfig, StudentConfig, PipelineConfig
@@ -123,6 +126,37 @@ pipeline = DistillationPipeline(
     config=PipelineConfig(
         output_dir="./runs/distill",
         val_split=0.2,
+        device="auto",
+    ),
+)
+
+pipeline.run(
+    images_dir="./my_images",
+    prompts="car",
+    class_names=["car"],
+)
+```
+
+### SegFormer Student
+
+```python
+from visiondistill import DistillationPipeline, TeacherConfig, StudentConfig, StudentModel, PipelineConfig
+
+pipeline = DistillationPipeline(
+    teacher=TeacherConfig(
+        model="sam3",
+        prompt_type="text",
+    ),
+    student=StudentConfig(
+        student_model=StudentModel.SEGFORMER,
+        model="nvidia/mit-b0",       # or "nvidia/mit-b1" through "nvidia/mit-b5"
+        num_labels=2,                 # background + 1 class
+        epochs=50,
+        imgsz=512,
+        batch=8,
+    ),
+    config=PipelineConfig(
+        output_dir="./runs/distill_segformer",
         device="auto",
     ),
 )
@@ -164,6 +198,19 @@ TeacherConfig(model="sam3", weights="facebook/sam3")
 TeacherConfig(model="sam3", weights="/path/to/local/sam3")
 ```
 
+## Supported Students
+
+| Student     | Framework              | Default weights      | Dataset format             |
+| ----------- | ---------------------- | -------------------- | -------------------------- |
+| `yolo`      | Ultralytics            | `yolov8n-seg.pt`     | YOLO polygons + data.yaml  |
+| `segformer` | HuggingFace Transformers | `nvidia/mit-b0`    | Images + per-pixel PNG masks |
+
+SegFormer backbones range from `nvidia/mit-b0` (lightweight) to `nvidia/mit-b5` (largest). Pass the desired checkpoint as the `model` field:
+
+```python
+StudentConfig(student_model="segformer", model="nvidia/mit-b5", num_labels=3)
+```
+
 ## Common Usage Modes
 
 Full pipeline:
@@ -201,11 +248,13 @@ visiondistill/
 - `config.py`: teacher, student, and pipeline config
 - `pipeline.py`: end-to-end orchestration
 - `teachers/`: SAM integrations
-- `students/`: Ultralytics student wrapper
-- `data/`: annotation conversion and dataset building
+- `students/`: YOLO and SegFormer student wrappers
+- `data/`: annotation conversion and dataset building (YOLO + SegFormer formats)
 - `utils/`: small helpers
 
 ## Output Layout
+
+YOLO student:
 
 ```text
 runs/distill/
@@ -213,10 +262,29 @@ runs/distill/
 ├── dataset/
 │   ├── data.yaml
 │   ├── train/
+│   │   ├── images/
+│   │   └── labels/
 │   └── val/
+│       ├── images/
+│       └── labels/
+└── train/
+```
+
+SegFormer student:
+
+```text
+runs/distill_segformer/
+├── raw_labels/
+├── dataset/
+│   ├── train/
+│   │   ├── images/
+│   │   └── masks/
+│   └── val/
+│       ├── images/
+│       └── masks/
 └── train/
 ```
 
 ## License
 
-This repository is `MIT` licensed. It currently depends on `ultralytics`, which is licensed separately under `AGPL-3.0` unless you have a commercial Ultralytics license.
+This repository is `MIT` licensed. It depends on `ultralytics` (licensed under `AGPL-3.0` unless you have a commercial Ultralytics license) and `transformers` (Apache 2.0).

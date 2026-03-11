@@ -4,14 +4,14 @@ from pathlib import Path
 from typing import Any
 
 from visiondistill.config import StudentConfig, TaskType
+from visiondistill.students.base import BaseStudent
 
 
-class YOLOStudent:
+class YOLOStudent(BaseStudent):
     """Wraps Ultralytics YOLO for training on pseudo-labeled data."""
 
     def __init__(self, config: StudentConfig, device: str = "cpu") -> None:
-        self.config = config
-        self.device = device
+        super().__init__(config, device)
         self._model: Any = None
 
     def load(self) -> None:

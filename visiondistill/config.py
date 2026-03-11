@@ -19,10 +19,20 @@ class PromptType(str, Enum):
     IMAGE_EXEMPLAR = "image_exemplar"
 
 
+class StudentModel(str, Enum):
+    YOLO = "yolo"
+    SEGFORMER = "segformer"
+
+
 class TaskType(str, Enum):
     SEGMENT = "segment"
     DETECT = "detect"
 
+
+STUDENT_DEFAULT_WEIGHTS: dict[StudentModel, str] = {
+    StudentModel.YOLO: "yolov8n-seg.pt",
+    StudentModel.SEGFORMER: "nvidia/mit-b0",
+}
 
 DEFAULTS_WEIGHTS: dict[TeacherModel, str] = {
     TeacherModel.SAM2: "facebook/sam2.1-hiera-large",
@@ -63,17 +73,26 @@ class TeacherConfig:
 
 @dataclass
 class StudentConfig:
-    """Configuration for the student (YOLO) model."""
+    """Configuration for the student model."""
 
-    model: str = "yolov8n-seg.pt"
+    student_model: str | StudentModel = StudentModel.YOLO
+    model: str | None = None
     task: str | TaskType = TaskType.SEGMENT
     epochs: int = 100
     imgsz: int = 640
     batch: int = 16
+    num_labels: int = 2
+    id2label: dict[int, str] | None = None
+    label2id: dict[str, int] | None = None
+    learning_rate: float = 6e-5
     augment: AugmentConfig | dict[str, Any] | None = None
     train_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if isinstance(self.student_model, str):
+            self.student_model = StudentModel(self.student_model)
+        if self.model is None:
+            self.model = STUDENT_DEFAULT_WEIGHTS[self.student_model]
         if isinstance(self.task, str):
             self.task = TaskType(self.task)
         if isinstance(self.augment, dict):
