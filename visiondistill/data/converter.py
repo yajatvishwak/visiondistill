@@ -4,6 +4,11 @@ import cv2
 import numpy as np
 
 
+# ---------------------------------------------------------------------------
+# Segmentation: mask → YOLO polygon labels
+# ---------------------------------------------------------------------------
+
+
 def mask_to_yolo_polygons(
     mask: np.ndarray,
     class_id: int = 0,
@@ -59,3 +64,47 @@ def masks_to_label_file(
             mask_to_yolo_polygons(mask, class_id=cid, epsilon_ratio=epsilon_ratio, min_area=min_area)
         )
     return "\n".join(all_lines)
+
+
+# ---------------------------------------------------------------------------
+# Detection: xyxy boxes → YOLO detect labels  (class cx cy w h, normalised)
+# ---------------------------------------------------------------------------
+
+
+def boxes_xyxy_to_yolo_detect_lines(
+    boxes: np.ndarray,
+    class_ids: list[int],
+    image_w: int,
+    image_h: int,
+) -> list[str]:
+    """Convert (N, 4) xyxy pixel-coordinate boxes to YOLO detect label lines.
+
+    Returns one string per box: ``class_id cx cy w h`` with all values
+    normalised to [0, 1].
+    """
+    lines: list[str] = []
+    for (x1, y1, x2, y2), cid in zip(boxes, class_ids):
+        cx = ((x1 + x2) / 2.0) / image_w
+        cy = ((y1 + y2) / 2.0) / image_h
+        bw = (x2 - x1) / image_w
+        bh = (y2 - y1) / image_h
+        cx = max(0.0, min(1.0, cx))
+        cy = max(0.0, min(1.0, cy))
+        bw = max(0.0, min(1.0, bw))
+        bh = max(0.0, min(1.0, bh))
+        lines.append(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+    return lines
+
+
+def boxes_to_yolo_label_file(
+    boxes: np.ndarray,
+    class_ids: list[int] | None = None,
+    image_w: int = 1,
+    image_h: int = 1,
+) -> str:
+    """Convert (N, 4) xyxy boxes to a YOLO detect label file string."""
+    if class_ids is None:
+        class_ids = [0] * len(boxes)
+    return "\n".join(
+        boxes_xyxy_to_yolo_detect_lines(boxes, class_ids, image_w, image_h)
+    )

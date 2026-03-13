@@ -9,6 +9,7 @@ from typing import Any
 class TeacherModel(str, Enum):
     SAM2 = "sam2"
     SAM3 = "sam3"
+    GROUNDING_DINO = "grounding_dino"
 
 
 class PromptType(str, Enum):
@@ -30,13 +31,18 @@ class TaskType(str, Enum):
 
 
 STUDENT_DEFAULT_WEIGHTS: dict[StudentModel, str] = {
-    StudentModel.YOLO: "yolov8n-seg.pt",
     StudentModel.SEGFORMER: "nvidia/mit-b0",
+}
+
+_YOLO_DEFAULT_WEIGHTS: dict[TaskType, str] = {
+    TaskType.SEGMENT: "yolov8n-seg.pt",
+    TaskType.DETECT: "yolov8n.pt",
 }
 
 DEFAULTS_WEIGHTS: dict[TeacherModel, str] = {
     TeacherModel.SAM2: "facebook/sam2.1-hiera-large",
     TeacherModel.SAM3: "facebook/sam3",
+    TeacherModel.GROUNDING_DINO: "IDEA-Research/grounding-dino-base",
 }
 
 
@@ -91,10 +97,13 @@ class StudentConfig:
     def __post_init__(self) -> None:
         if isinstance(self.student_model, str):
             self.student_model = StudentModel(self.student_model)
-        if self.model is None:
-            self.model = STUDENT_DEFAULT_WEIGHTS[self.student_model]
         if isinstance(self.task, str):
             self.task = TaskType(self.task)
+        if self.model is None:
+            if self.student_model == StudentModel.YOLO:
+                self.model = _YOLO_DEFAULT_WEIGHTS[self.task]
+            else:
+                self.model = STUDENT_DEFAULT_WEIGHTS[self.student_model]
         if isinstance(self.augment, dict):
             self.augment = AugmentConfig(self.augment)
 

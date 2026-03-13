@@ -8,6 +8,7 @@ from visiondistill.config import (
     PipelineConfig,
     StudentConfig,
     StudentModel,
+    TaskType,
     TeacherConfig,
     TeacherModel,
 )
@@ -38,15 +39,18 @@ def _build_teacher(config: TeacherConfig) -> BaseTeacher:
     elif config.model == TeacherModel.SAM3:
         from visiondistill.teachers.sam3 import SAM3Teacher
         return SAM3Teacher(config)
+    elif config.model == TeacherModel.GROUNDING_DINO:
+        from visiondistill.teachers.grounding_dino import GroundingDINOTeacher
+        return GroundingDINOTeacher(config)
     raise ValueError(f"Unknown teacher model: {config.model}")
 
 
 class DistillationPipeline:
     """End-to-end pseudo-labeling distillation pipeline.
 
-    1. Load the teacher model (SAM2 / SAM3).
-    2. Run inference on the user's images to produce segmentation masks.
-    3. Convert masks to YOLO-format polygon labels.
+    1. Load the teacher model (SAM2 / SAM3 / Grounding DINO).
+    2. Run inference on the user's images to produce masks or bounding boxes.
+    3. Convert predictions to YOLO-format labels (polygons or bboxes).
     4. Build a dataset directory (YOLO or SegFormer format).
     5. Train a student model (YOLO or SegFormer).
     """
@@ -90,9 +94,16 @@ class DistillationPipeline:
         labels_dir = output_dir / "raw_labels"
         dataset_dir = output_dir / "dataset"
 
+        if (
+            self.teacher_config.model == TeacherModel.GROUNDING_DINO
+            and prompts is None
+            and class_names
+        ):
+            prompts = class_names
+
         if not skip_annotation:
             logger.info("Step 1/3: Generating pseudo-labels with %s", self.teacher_config.model.value)
-            self._annotate(images_dir, labels_dir, prompts, class_ids)
+            self._annotate(images_dir, labels_dir, prompts, class_ids, class_names)
         else:
             logger.info("Skipping annotation (skip_annotation=True)")
 
@@ -131,11 +142,20 @@ class DistillationPipeline:
         labels_dir: str | Path | None = None,
         prompts: Prompts = None,
         class_ids: list[int] | None = None,
+        class_names: list[str] | None = None,
     ) -> Path:
         """Only run the annotation step; returns the labels directory."""
         images_dir = Path(images_dir)
         labels_dir = Path(labels_dir) if labels_dir else self.config.output_dir / "raw_labels"
-        self._annotate(images_dir, labels_dir, prompts, class_ids)
+
+        if (
+            self.teacher_config.model == TeacherModel.GROUNDING_DINO
+            and prompts is None
+            and class_names
+        ):
+            prompts = class_names
+
+        self._annotate(images_dir, labels_dir, prompts, class_ids, class_names)
         return labels_dir
 
     def train_only(self, data_path: str | Path) -> Any:
@@ -152,6 +172,7 @@ class DistillationPipeline:
         labels_dir: Path,
         prompts: Prompts,
         class_ids: list[int] | None,
+        class_names: list[str] | None = None,
     ) -> None:
         teacher = self._get_teacher()
         annotate_dataset(
@@ -160,6 +181,8 @@ class DistillationPipeline:
             labels_dir=labels_dir,
             prompts=prompts,
             class_ids=class_ids,
+            task=self.student_config.task,
+            class_names=class_names,
         )
 
     def _train(self, data_path: Path, project: Path | None = None) -> Any:

@@ -1,16 +1,15 @@
 # visiondistill
 
-`visiondistill` uses foundation vision models such as `SAM2` and `SAM3` to generate pseudo-labels, then trains smaller student models (YOLO or SegFormer) on that data.
-
-Current focus: segmentation distillation. Detection support can be added later through the same pipeline structure.
+`visiondistill` uses foundation vision models to generate pseudo-labels, then trains smaller student models on that data. Supports both **segmentation** (SAM2/SAM3 → YOLO-seg / SegFormer) and **detection** (Grounding DINO → YOLO-detect) distillation.
 
 ## What It Does
 
 - Loads teacher weights from Hugging Face or a local path
-- Supports `sam2` and `sam3`
-- Generates segmentation masks from prompts or automatic mask generation
-- Converts masks to YOLO segmentation labels or per-pixel PNG masks
-- Builds a `train/` and `val/` dataset (YOLO format or SegFormer format)
+- Supports `sam2`, `sam3`, and `grounding_dino` teachers
+- Generates segmentation masks **or** bounding boxes from prompts
+- Converts predictions to YOLO labels (polygons or bboxes) or per-pixel PNG masks
+- Optionally exports a COCO-format `annotations.json` for detection tasks
+- Builds `train/` and `val/` dataset splits
 - Trains a student model -- YOLO via Ultralytics or SegFormer via HuggingFace Trainer
 
 ## How It Works
@@ -18,18 +17,20 @@ Current focus: segmentation distillation. Detection support can be added later t
 ```mermaid
 flowchart LR
     images[Images] --> teacher[TeacherModel]
-    prompts[PromptsOptional] --> teacher
-    teacher --> masks[Masks]
-    masks --> labels[YOLOPolygonLabels]
-    labels --> yoloDS[YOLODataset]
-    labels --> sfDS[SegFormerDataset]
+    prompts[Prompts] --> teacher
+    teacher -->|segment| masks[Masks]
+    teacher -->|detect| bboxes[BoundingBoxes]
+    masks --> polyLabels[YOLOPolygonLabels]
+    bboxes --> bboxLabels[YOLODetectLabels]
+    bboxes --> cocoJSON["COCO JSON"]
+    polyLabels --> yoloDS[YOLODataset]
+    polyLabels --> sfDS[SegFormerDataset]
+    bboxLabels --> yoloDS
     yoloDS --> yolo[UltralyticsYOLO]
     sfDS --> sf[HuggingFaceSegFormer]
     yolo --> weights[StudentWeights]
     sf --> weights
 ```
-
-
 
 ## Install
 
@@ -59,7 +60,7 @@ By default, `device` is set to `"auto"`, which picks the best available backend:
 2. Apple Silicon MPS if available
 3. CPU as fallback
 
-Both the teacher (SAM) and the student (YOLO or SegFormer) run on the same resolved device. The dtype is also adjusted automatically -- `float16` is only used on CUDA; on MPS and CPU it promotes to `float32`.
+Both the teacher and the student run on the same resolved device. The dtype is also adjusted automatically -- `float16` is only used on CUDA; on MPS and CPU it promotes to `float32`.
 
 ### NVIDIA CUDA
 
@@ -107,7 +108,7 @@ If you request `cuda` or `mps` and it is not available, the pipeline logs a warn
 
 ## Quick Start
 
-### YOLO Student (default)
+### Segmentation: YOLO Student (default)
 
 ```python
 from visiondistill import DistillationPipeline, TeacherConfig, StudentConfig, PipelineConfig
@@ -137,7 +138,7 @@ pipeline.run(
 )
 ```
 
-### SegFormer Student
+### Segmentation: SegFormer Student
 
 ```python
 from visiondistill import DistillationPipeline, TeacherConfig, StudentConfig, StudentModel, PipelineConfig
@@ -168,7 +169,41 @@ pipeline.run(
 )
 ```
 
+### Detection: Grounding DINO → YOLO
+
+Use `grounding_dino` as the teacher and set `task="detect"`. Class names are automatically used as the detection query -- no separate prompt needed.
+
+```python
+from visiondistill import DistillationPipeline, TeacherConfig, StudentConfig, PipelineConfig
+
+pipeline = DistillationPipeline(
+    teacher=TeacherConfig(
+        model="grounding_dino",
+        threshold=0.3,
+    ),
+    student=StudentConfig(
+        task="detect",
+        model="yolov8n.pt",          # or yolov9c.pt, yolo11n.pt, etc.
+        epochs=100,
+        imgsz=640,
+    ),
+    config=PipelineConfig(
+        output_dir="./runs/distill_detect",
+        device="auto",
+    ),
+)
+
+pipeline.run(
+    images_dir="./my_images",
+    class_names=["car", "truck", "bus"],
+)
+```
+
+When `task="detect"`, YOLO-normalized bbox labels are written for training and a COCO-format `annotations.json` is saved alongside them.
+
 ### CLI
+
+Segmentation (default):
 
 ```bash
 visiondistill ./my_images \
@@ -180,36 +215,74 @@ visiondistill ./my_images \
     --device cuda
 ```
 
+Detection with Grounding DINO:
+
+```bash
+visiondistill ./my_images \
+    --teacher-model grounding_dino \
+    --class-names car truck bus \
+    --student-model yolov9c.pt \
+    --task detect \
+    --threshold 0.3 \
+    --epochs 100 \
+    --device cuda
+```
+
 Per-image prompts can also be passed with `--prompts-json`.
 
-## Supported Teachers
+## Supported Models
 
+### Teachers
 
-| Teacher | Prompt types                                | Default weights               |
-| ------- | ------------------------------------------- | ----------------------------- |
-| `sam2`  | `auto`, `points`, `boxes`                   | `facebook/sam2.1-hiera-large` |
-| `sam3`  | `text`, `image_exemplar`, `boxes`, `points` | `facebook/sam3`               |
-
+| Teacher           | Task      | Prompt types                                | Default weights                     |
+| ----------------- | --------- | ------------------------------------------- | ----------------------------------- |
+| `sam2`            | segment   | `auto`, `points`, `boxes`                   | `facebook/sam2.1-hiera-large`       |
+| `sam3`            | segment   | `text`, `image_exemplar`, `boxes`, `points` | `facebook/sam3`                     |
+| `grounding_dino`  | detect    | `text`                                      | `IDEA-Research/grounding-dino-base` |
 
 Examples:
 
 ```python
 TeacherConfig(model="sam3", weights="facebook/sam3")
 TeacherConfig(model="sam3", weights="/path/to/local/sam3")
+TeacherConfig(model="grounding_dino", threshold=0.3)
 ```
 
-## Supported Students
+### Students
 
-| Student     | Framework              | Default weights      | Dataset format             |
-| ----------- | ---------------------- | -------------------- | -------------------------- |
-| `yolo`      | Ultralytics            | `yolov8n-seg.pt`     | YOLO polygons + data.yaml  |
-| `segformer` | HuggingFace Transformers | `nvidia/mit-b0`    | Images + per-pixel PNG masks |
+| Student     | Framework                | Supported tasks      | Default weights (segment) | Default weights (detect) | Dataset format              |
+| ----------- | ------------------------ | -------------------- | ------------------------- | ------------------------ | --------------------------- |
+| `yolo`      | Ultralytics              | `segment`, `detect`  | `yolov8n-seg.pt`          | `yolov8n.pt`             | YOLO labels + `data.yaml`  |
+| `segformer` | HuggingFace Transformers | `segment`            | `nvidia/mit-b0`           | --                       | Images + per-pixel PNG masks |
+
+The YOLO student accepts **any Ultralytics-compatible model string** as the `model` field. Common examples:
+
+| Model string      | Architecture | Notes                    |
+| ----------------- | ------------ | ------------------------ |
+| `yolov8n.pt`      | YOLOv8 nano  | Smallest / fastest       |
+| `yolov8s.pt`      | YOLOv8 small |                          |
+| `yolov8m.pt`      | YOLOv8 medium|                          |
+| `yolov8n-seg.pt`  | YOLOv8 nano  | Segmentation variant     |
+| `yolov9c.pt`      | YOLOv9 compact|                         |
+| `yolov9e.pt`      | YOLOv9 extended|                        |
+| `yolo11n.pt`      | YOLO11 nano  |                          |
+| `yolo11s.pt`      | YOLO11 small |                          |
+
+Any other `.pt` path or Ultralytics hub model name also works -- the string is passed through to `ultralytics.YOLO(...)` unchanged.
 
 SegFormer backbones range from `nvidia/mit-b0` (lightweight) to `nvidia/mit-b5` (largest). Pass the desired checkpoint as the `model` field:
 
 ```python
 StudentConfig(student_model="segformer", model="nvidia/mit-b5", num_labels=3)
 ```
+
+### Teacher-to-Student Mapping
+
+| Teacher           | Student     | Task      | Label format                                    | Output artifacts                          |
+| ----------------- | ----------- | --------- | ----------------------------------------------- | ----------------------------------------- |
+| `sam2` / `sam3`   | `yolo`      | `segment` | YOLO polygon labels (`class x1 y1 ... xn yn`)  | `data.yaml` + label `.txt` files          |
+| `sam2` / `sam3`   | `segformer` | `segment` | Per-pixel PNG masks                             | `train/` + `val/` image/mask directories  |
+| `grounding_dino`  | `yolo`      | `detect`  | YOLO bbox labels (`class cx cy w h`)            | `data.yaml` + label `.txt` + `annotations.json` (COCO) |
 
 ## Common Usage Modes
 
@@ -247,18 +320,36 @@ visiondistill/
 
 - `config.py`: teacher, student, and pipeline config
 - `pipeline.py`: end-to-end orchestration
-- `teachers/`: SAM integrations
+- `teachers/`: SAM2, SAM3, and Grounding DINO integrations
 - `students/`: YOLO and SegFormer student wrappers
-- `data/`: annotation conversion and dataset building (YOLO + SegFormer formats)
+- `data/`: annotation conversion, COCO export, and dataset building
 - `utils/`: small helpers
 
 ## Output Layout
 
-YOLO student:
+YOLO student (segmentation):
 
 ```text
 runs/distill/
 ├── raw_labels/
+├── dataset/
+│   ├── data.yaml
+│   ├── train/
+│   │   ├── images/
+│   │   └── labels/
+│   └── val/
+│       ├── images/
+│       └── labels/
+└── train/
+```
+
+YOLO student (detection):
+
+```text
+runs/distill_detect/
+├── raw_labels/
+│   ├── *.txt              (YOLO bbox labels)
+│   └── annotations.json   (COCO format)
 ├── dataset/
 │   ├── data.yaml
 │   ├── train/
