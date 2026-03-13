@@ -44,6 +44,10 @@ class GroundingDINOTeacher(BaseTeacher):
         inputs = self.processor(images=image, text=text, return_tensors="pt").to(
             self.model.device
         )
+        if inputs.get("pixel_values") is not None:
+            inputs["pixel_values"] = inputs["pixel_values"].to(
+                dtype=self.model.dtype
+            )
 
         with torch.no_grad():
             outputs = self.model(**inputs)
